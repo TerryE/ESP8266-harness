@@ -13,8 +13,8 @@ accompanying README.md and wiki
 ]]  
 
 CONFIG = {
-  sid = "Homefarm",
-  sid_key = "in#te#sperant",
+  sid = "XXXXXXXXXXX",
+  sid_key = "XXXXXXXXXXX",
   ip="192.168.1.48",
   netmask="255.255.255.0",
   gateway="192.168.1.254", }
