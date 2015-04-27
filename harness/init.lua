@@ -13,11 +13,12 @@ accompanying README.md and wiki
 ]]  
 
 CONFIG = {
-  sid = "XXXXXXXXXXX",
-  sid_key = "XXXXXXXXXXX",
+  sid = "Homefarm",
+  sid_key = "in#te#sperant",
   ip="192.168.1.48",
   netmask="255.255.255.0",
   gateway="192.168.1.254", }
 
-local setup = loadfile("Load_setup.lua")
+uart.setup(0, 460800, 8, 0, 1, 1 )
+local setup = require("Load_setup")
 if setup then tmr.alarm(6, 5000, 1, setup) end

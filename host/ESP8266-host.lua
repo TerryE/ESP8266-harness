@@ -4,9 +4,10 @@ local socket = require("socket")
 local DEVICE_IP = os.getenv("ESP8266_DEVICE") or "192.168.1.48"
 local DEVICE_PORT = os.getenv("ESP8266_PORT") or "8266"
 
-local action = require("ESP8266-routines")
+local action -- = require("ESP8266-routines")
 
 local function die( msg, rtn ) -- Abnormal exit --------------------------------
+  if(type(rtn)=="string") then rtn = tonumber(rtn) end
   io.stderr:write( msg )
   if client then client:close() end
   os.exit(rtn or 1)
@@ -89,11 +90,12 @@ follows the unix convention of 0 = OK, >0 an error ]]
 
   local MAX_RAM_BLOB = 1024
   local blobLen = arg.blob and #(arg.blob) or 0 
+  local params = arg.params or {}
   local s = (blobLen > MAX_RAM_BLOB) and -blobLen or blobLen
-  local request = arg.cmd .. 
-                  ((#(arg.parmeters) == 0) 
-                     and "" 
-                     or  "\t" .. table.concat(arg.params, "\t"))
+
+  local request = arg.cmd .. "\t" .. s ..
+                  ((#params == 0) and "" or  "\t" .. table.concat(params, "\t")) ..
+                  "\r\n"
   -- send out request
   TCPsend(request)
   if blobLen > 0 then 
@@ -106,28 +108,17 @@ follows the unix convention of 0 = OK, >0 an error ]]
   
   -- listen for and process the response in TSV fields
   local line, fld = "\t"..TCPreceive(), {}
+-- print(line)
   line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2,-1) end)
   --TODO: accept multiblock blob
   -- if the response blob size is non-zero then replace it with the blob
-  fld[3] = (tonumber(fld[3]) == 0) and "" or TCPreceive(tonumber(fld[3]))
-  return unpack(fld)
+  fld[2] = (tonumber(fld[2]) == 0) and "" or TCPreceive(tonumber(fld[2]))
+  fld[3] = tonumber(fld[3])
+  if fld[1] ~= arg.cmd then die( "unexpected response", 1) end
+  
+  return unpack(fld,2)
 end
 
--- Wrappers for RPC to ESP8266 without and with attached blob ------------------
-local function remoteCall(...)
-  local arg = {...}
-  local cmd = arg[1]
-  return callESP8266{ cmd = cmd, params={unpack(arg, 2)}}
-end
---TODO: work out why this doesn't compile !!!!!
-local function remoteCallBlob(...)
-  local cmd = ...
-  local nArg = select('#', ...)
-  local blob = unpack( {...}, nArg)
-  local params = {unpack( {...}, 2, nArg-1)}
-  return callESP8266{ cmd = cmd, params = params, blob = blob } 
-
-end
 -- Load contents of the given file ---------------------------------------------
 local function loadFile(fname)
   local INF = io.open(fname, "rb") or 
@@ -154,32 +145,40 @@ local function main()
   if argn == 0 then
     arg[1], argn = "-h", 1
   end
-   
+
+  do
+    local s = arg[0]:find("[^/]+$")
+    if s then  -- only needed for explicit path since "." is already on the path
+      local path = arg[0]:sub(1,s-1)
+      package.path = path.."?.lc;"..path.."?.lua;"..package.path
+    end
+    action = require("ESP8266-routines")
+  end
+ 
   -- handle arguments
-  local i = 0
+  local i = 1
+  
   while i <= argn do
     local option, p1, p2 = unpack(arg, i, i+2)
     local mFlag, optChar = option:sub(1,1), option:sub(2,2)
     
     if mFlag == "-" and #option == 2 and action[optChar] then
       -- the action routine exists so call it
-      local status, msg, idx = action[optChar](p1, p2)
-
-      if status ~= 0 then
+      local idx, status, msg = action[optChar](p1, p2)
+      if status > 0 then
         die(msg, status)
       end  
-       
+      
       if (msg ~= "") then
         if msg:sub(-2) ~= CR then msg = msg .. CR end
         print (msg)
-      end
-      
-      i = i + idx
+      end     
+      i = i + idx + 1
     else
       die ("unrecognized parameter " .. option) 
     end
-    i = i + 1
   end  --while
+  return 0
 end
 
 -- export some local variables to global context

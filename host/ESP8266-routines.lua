@@ -54,7 +54,7 @@ local function getInfo()
   local keys= {"majorVer", "minorVer", "devVer", "chipid", "flashid", 
                "flashsize", "flashmode", "flashspeed", "free heap", "GC count"}
   local ans = {callESP8266{cmd= "util", params = {"info"}}}
-  if ans[2] > 0 then return 1, ans[2], ans[3] end
+  if ans[2] ~= "0" then return 1, tonumber(ans[2]), ans[3] end
   ans = {unpack(ans,3)}
 
   -- noHeader mode is used for command scripts, e.g. declare `esp8266 -N -i`  
@@ -62,7 +62,7 @@ local function getInfo()
   for i,v in ipairs(ans) do 
     ans[i] = layout:format(keys[i], v)
   end
-  return 1, 0, table.concat(ans, "\r\n")
+  return 0, 0, table.concat(ans, "\r\n")
 end
 
 -- Set No Header Mode ----------------------------------------------------------
@@ -73,26 +73,26 @@ end
 
 -- Do a file listing of the ESP8266 --------------------------------------------
 local function getFileList()
-  local status, listing, resp = callESP8266{cmd="list"}
-  
-  if status > 0 then return 0, status, resp end
+  local listing, status, resp = callESP8266{cmd="list"}
+
+  if status ~= "0" then return 0, status, resp end
   
   local underline = ("="):rep(#resp)
+  resp = noHeaderFlag and "" or resp..CR..underline..CR..CR
   
-  if not noHeaderFlag then resp = header..CR..underline..CR..CR..resp end
-  return 0, status, resp
+  return 0, status, resp..listing
 end
 
 -- Reboot the ESP8266 ----------------------------------------------------------
 local function restart()
-  local status, _, resp = callESP8266{cmd="util", params = {"restart"}}
+  local _, status, resp = callESP8266{cmd="util", params = {"restart"}}
   return 0, status, resp
 end
 
 -- Reformat and bootstrap the ESP8266 ------------------------------------------
 local function bootstrap()
   -- TODO: download a new copy of the key code in a blob
-  local status, _, resp = callESP8266{cmd="bootstrap"}
+  local _, status, resp = callESP8266{cmd="bootstrap"}
   return 0, status, resp
 end
 
@@ -107,7 +107,7 @@ local function download(filename)
 
   local fileContent = loadFile(filename)
   
-  local status ,_ , resp = callESP8266{
+  local _, status, resp = callESP8266{
       cmd="util", 
       params={"download", baseName}, 
       blob  = fileContent }
@@ -117,18 +117,18 @@ end
 -- Print a file on the ESP8266 -------------------------------------------------
 local function printFile(filename)
   local listing, header
-  local status, listing, resp = callESP8266{
+  local listing, status, resp = callESP8266{
       cmd="util", 
-      params={"download", filename}}
+      params={"upload", filename}}
   
   if status > 0 then return 0, status, resp end
 
   if not noHeaderFlag then 
     local underline = ("="):rep(#resp)
-    resp = resp..CR..underline..CR..CR..listing 
+    resp = resp..CR..underline..CR..CR 
   end
   
-  return 0, status, resp
+  return 1, status, resp..listing
 end
 
 -- remove file(s) on the ESP8266 -----------------------------------------------
@@ -143,13 +143,13 @@ local function remove(filepattern)
     filepattern = filepattern:gsub(v[1], v[2])
   end
   
-  local status, listing, resp = callESP8266{
+  local listing, status, resp = callESP8266{
       cmd="util", 
       params={"remove", filepattern}}
   
   if status > 0 then return 0, status, resp end
 
-  return 0, status, noHeaderFlag and "" or resp
+  return 1, status, noHeaderFlag and "" or resp
 end
 
 -- Upload a file from the ESP8266 ----------------------------------------------
@@ -164,7 +164,7 @@ local function upload(filename)
     path, baseName = filename:sub(1,s-2), filename:sub(s, e)
   end
 
-  local status, content, resp = callESP8266{
+  local content, status, resp = callESP8266{
       cmd="util", 
       params={"download", filename}}
   

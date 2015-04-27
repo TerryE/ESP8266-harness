@@ -1,4 +1,4 @@
--- Load_processCommand.lua  function Loader.processCommand(socket,rec)
+-- Load_processCmd.lua  function Load.processCmd(socket,rec)
 --[[
 This version of the receiver is designed to capitalise on the assured delivery 
 of the TCP stack snd is always synchronous,in  that the requestor will always 
@@ -18,89 +18,91 @@ The following class properties are used to store the context:
 Any errors in processing the command results in a reboot.
 
 ]]
-local file = file
-local this, rec = ...
-local lenLeft = this._lenLeft or 0
-local fld,cmd,size,recLen
+return function(this, rec) 
+  local file = file
+  local lenLeft = this._lenLeft or 0
+  local fld,cmd,size,recLen
 
-local function saveBlob(this, mode, rec)
-  local tmpName = this._tmpName 
-  if tmpName then
-    file.open(tmpName, mode)
-    file.write(rec)
-    file.flush()
-    file.close()
-  else
-    this._blob = (this._blob or "") .. rec
-  end
-end
---print("Record: ", #rec, lenLeft )
-if lenLeft == 0 then --------- Process the next command line ------------
+  package.loaded.Load_processCmd=nil -- make routine effemeral
 
-  -- Look for CR-LF and if not found set the this.rec fragment and return 
-  -- to wait for the next TCP receive
-  local s,e = rec:find("\r?\n")
-  if not s then node.restart() end
-
-  -- We have complete request line so split it into separate tab-separated
-  -- fields and extract the standard command and size fields
-  local line = "\t" .. rec:sub(1, s-1)
-  rec = rec:sub(e+1,-1)
-
-  fld = {}
-  line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2,-1) end)
-    
-  size, recLen = tonumber(fld[2] or 0), rec:len()
-  
-  -- A negative size indicates that the blob is to be written to a temporary 
-  -- file.  Note that file-based blobs should in general be avoided for normal 
-  -- procesing as SPIFfs can only tolerate limited write cycles.
-  if size < 0 then
-    size = -size
-    fld[2]=size
-    this._tmpName = ('tmp%u.tmp'):format(tmr.now())
-    file.remove(this._tmpName)
-  else
-    this._tmpName = nil
-  end
-
-  if size == 0 then             -- there is no blob so ignore any trailer
-    lenLeft = 0
-  else
-    if recLen > size then 
-      rec = rec:sub(1,size)
-      recLen = size
+  local function saveBlob(this, mode, rec)
+    local tmpName = this._tmpName 
+    if tmpName then
+      file.open(tmpName, mode)
+      file.write(rec)
+      file.flush()
+      file.close()
+    else
+      this._blob = (this._blob or "") .. rec
     end
-    saveBlob(this, "w+", rec)
-    lenLeft = size - recLen
-  end 
+  end
+  --print("Record: ", #rec, lenLeft )
+  if lenLeft == 0 then --------- Process the next command line ------------
+
+    -- Look for CR-LF and if not found set the this.rec fragment and return 
+    -- to wait for the next TCP receive
+    local s,e = rec:find("\r?\n")
+    if not s then node.restart() end
+
+    -- We have complete request line so split it into separate tab-separated
+    -- fields and extract the standard command and size fields
+    local line = "\t" .. rec:sub(1, s-1)
+    rec = rec:sub(e+1,-1)
+
+    fld = {}
+    line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2,-1) end)
+--for i = 1, #fld do print (i..": "..fld[i]) end      
+    size, recLen = tonumber(fld[2] or 0), rec:len()
     
-  this._fld, rec = fld, nil 
+    -- A negative size indicates that the blob is to be written to a temporary 
+    -- file.  Note that file-based blobs should in general be avoided for normal 
+    -- procesing as SPIFfs can only tolerate limited write cycles.
+    if size < 0 then
+      size = -size
+      fld[2]=size
+      this._tmpName = ('tmp%u.tmp'):format(tmr.now())
+      file.remove(this._tmpName)
+    else
+      this._tmpName = nil
+    end
 
-else -------  we are still consuming data so add this lot to the blob ------
-  fld = this._fld
-  size, recLen = tonumber(fld[2] or 0), rec:len()
+    if size == 0 then             -- there is no blob so ignore any trailer
+      lenLeft = 0
+    else
+      if recLen > size then 
+        rec = rec:sub(1,size)
+        recLen = size
+      end
+      saveBlob(this, "w+", rec)
+      lenLeft = size - recLen
+    end 
+      
+    this._fld, rec = fld, nil 
 
-  if recLen > lenLeft then
-    rec = rec:sub(1,lenLeft)
-    lenLeft = 0
+  else -------  we are still consuming data so add this lot to the blob ------
+    fld = this._fld
+    size, recLen = tonumber(fld[2] or 0), rec:len()
+
+    if recLen > lenLeft then
+      rec = rec:sub(1,lenLeft)
+      lenLeft = 0
+    else
+      lenLeft = lenLeft - recLen  
+    end
+    
+    saveBlob(this, "a+", rec)
+  end
+
+  ----- If lenLeft == 0 we can emit the command otherwise return a dummy ------ 
+  --print ("executing " .. fld[1], lenLeft)
+  if lenLeft == 0 then 
+    local cmd  = fld[1]
+    this._lenLeft=nil
+    if file.open("Load_"..cmd..".lc") or file.open("Load_"..cmd..".lua") then
+      file.close()
+      return cmd
+    end
   else
-    lenLeft = lenLeft - recLen  
+    this._lenLeft = lenLeft
   end
-  
-  saveBlob(this, "a+", rec)
 end
-
------ If lenLeft == 0 we can emit the command otherwise return a dummy ------ 
---print ("executing " .. fld[1], lenLeft)
-if lenLeft == 0 then 
-  local cmd  = fld[1]
-  this._lenLeft=nil
-  if file.open("Load_"..cmd..".lc") or file.open("Load_"..cmd..".lua") then
-    file.close()
-    return cmd
-  end
-else
-  this._lenLeft = lenLeft
-end
-return "dummyRtn"
