@@ -1,6 +1,6 @@
 -- Load_list.lua
 --[[
-This is the directory list function  
+This is the directory list function
 ]]
 return function(this, socket)
   local fld = this._fld
@@ -8,8 +8,8 @@ return function(this, socket)
 
   package.loaded.Load_list = nil -- make routine effemeral
 
-  -- TODO this listing might get longer than the max string length 
-  for fn, size in pairs(file.list()) do 
+  -- TODO this listing might get longer than the max string length
+  for fn, size in pairs(file.list()) do
     list[#list+1] = fn .. "\t" .. size
     total = total + size
   end
@@ -17,8 +17,8 @@ return function(this, socket)
   local listLen = #list
 
   if listLen == 0 then
-    resp = "list\t0\t0\tNo files found\r\n"  
-  else 
+    resp = "list\t0\t0\tNo files found\r\n"
+  else
     blob = table.concat(list,"\r\n") .. "\r\n"
     list=nil
     resp = ("list\t%u\t0\t%u Files totalling %u bytes\r\n"):format(

@@ -19,6 +19,6 @@ CONFIG = {
   netmask="255.255.255.0",
   gateway="192.168.1.254", }
 
-uart.setup(0, 460800, 8, 0, 1, 1 )
+uart.setup(0, 115200, 8, 0, 1, 1 )
 local setup = require("Load_setup")
 if setup then tmr.alarm(6, 5000, 1, setup) end
