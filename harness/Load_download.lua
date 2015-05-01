@@ -23,7 +23,8 @@ return function(this, socket)
        created=true
        file.close()
     end
-  end 
+  end
+print(filename.. "created (".. file.list()[filename] .." bytes)")
 
   if created and mode == "compile" then
     node.compile(filename)

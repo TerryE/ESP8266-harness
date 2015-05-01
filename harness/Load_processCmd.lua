@@ -36,12 +36,10 @@ return function(this, rec)
       this._blob = (this._blob or "") .. rec
     end
   end
-print("Record: ", #rec, lenLeft )
   if lenLeft == 0 then --------- Process the next command line ------------
 
     -- Look for CR-LF and if not found set the this.rec fragment and return
     -- to wait for the next TCP receive
-print(rec)
     local s,e = rec:find("\r?\n")
     if not s then node.restart() end
 
@@ -52,7 +50,6 @@ print(rec)
 
     fld = {}
     line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2) end)
---for i = 1, #fld do print (i..": "..fld[i]) end
     size, recLen = tonumber(fld[2] or 0), #rec
 
     -- A negative size indicates that the blob is to be written to a temporary

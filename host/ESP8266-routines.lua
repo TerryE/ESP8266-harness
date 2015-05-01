@@ -166,13 +166,13 @@ local function upload(filename)
 
   local content, status, resp = callESP8266{
       cmd="util",
-      params={"download", filename}}
+      params={"upload", baseName}}
 
   if status == 0 then
     save_file( filename, content )
   end
 
-  return 1, status, noHeaderFlag and "" or resp
+  return 1, status, (noHeaderFlag and "" or resp)
 end
 
 -- remove file(s) on the ESP8266 -----------------------------------------------

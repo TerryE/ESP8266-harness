@@ -1,51 +1,68 @@
 #!/usr/bin/env lua
+--[[ESP8266-host.lua
+  The development and execution harness for the ESP8266 chipset boards is
+  based on two application subsystems:
+
+   * the developer machine where a simple classical *nix-style command
+     interface is provided to make remote function calls as a TCP clients to
+     the ESP IoT board.  For example the command "esp8266 -l" lists all files
+     on the ESP-XX file system.
+
+   * an extensible framework which is installed on the ESP-XX files which acts
+     a TCP server (typically on TCP socket 8266) to receive and action these
+     commands.
+
+  Note that:
+
+   * Both the client and server ends are both written in Lua 5.1, with the
+     client end being standard Lua 5.1 and the server being written in the
+     nodeMCU eLua variant.
+
+   * These variants are identical in terms of Lua language syntax, with the
+     main difference being that the ESP8266 runs a severely cut-down VM and
+     runtime system suitable for embedded use.
+
+   * The other main aspect is that memory use and execution performance aren't
+     really an issue on the development side (which will typically be an Intel
+     / AMD PC or Laptop, or an ARM RPi), so the main development aim was to
+     keep the code simple and straightforward.  However, RAM is severely limited
+     on the ESP8266 side (~23Kbyte application RAM), as is the file system, so
+     a key design criteria for the harness was to keep the RPC stack simple and
+     its resident footprint as small as practical.
+]]
 
 local DEVICE_IP = os.getenv("ESP8266_DEVICE") or "192.168.1.48"
 local DEVICE_PORT = os.getenv("ESP8266_PORT") or "8266"
 
 -- For some reason the script dir isn't on the package path so add it ----------
-local function addScriptDirToPath()
+local function add_script_dir_to_path()
   local s = arg[0]:find("[^/]+$")
   if not s then return end  -- "." is already on the path
   local path = arg[0]:sub(1,s-1)
   package.path = path.."?.lc;"..path.."?.lua;"..package.path
 end
 
-addScriptDirToPath()
-
+-- Now import required modules -------------------------------------------------
+add_script_dir_to_path()
 local CM = require("ESP8266-common")
-CM.forceExplicitGlobals()
-global("CM", CM)
-local die = CM.die 
-
 local AR = require("ESP8266-routines")
-
-global("socket")
---for k,v in pairs(_G) do print(k) end                 
-
 local SK = require("socket")
-local connect = SK.connect
 
-global("client")
---for k,v in pairs(_G) do print(k) end                 
+local die, connect = CM.die, SK.connect
 
-global("client", connect( DEVICE_IP, 8266 ) or
-                 die("Unable to connect to "..DEVICE_IP..":"..DEVICE_PORT))
-
---for k,v in pairs(_G) do print(k) end                 
-client:setoption( 'keepalive', true )
-client:setoption( 'tcp-nodelay', true )
-
-global( "CR", "\r\n" )
-
---------------------------------------------------------------------------------
---                        Low level glue routines                             --
---------------------------------------------------------------------------------
+-- Create client TCP connection ------------------------------------------------
+local function create_TCP_client(ip, port)
+  local sk = SK.tcp().connect(ip, port) or
+               die("Unable to connect to "..ip..":"..port)
+  sk:setoption( 'keepalive', true )
+  sk:setoption( 'tcp-nodelay', true )
+  global("TCPclient", sk)
+end
 
 -- Basic TCP send with error handling wrapped in -------------------------------
 local function TCPsend( buf )
 --print ("Sending ... " .. buf)
-  local n, error, nSent = client:send(buf)
+  local n, error, nSent = TCPclient:send(buf)
   if error then
     die( "Error sending TCP packet to ESP8266: " ..
           error .. " (" .. nSent .. "bytes sent out of " .. n)
@@ -55,7 +72,7 @@ end
 -- Basic TCP receive with error handling wrapped in ----------------------------
 local function TCPreceive( limit )
   local limit = limit or "*l"
-  local buf, error, part = client:receive( limit )
+  local buf, error, part = TCPclient:receive( limit )
 -- print("Receiving: "..buf)
   if error then
     die (string.format(
@@ -92,8 +109,8 @@ Flash storage has a limited write life, use of file-based blobs should be
 avoided where possible, e.g. if the blob size is <1K.
 
 On the reply a third field is also mandatory: the response status.  This
-follows the unix convention of 0 = OK, >0 an error ]]
-
+follows the unix convention of 0 = OK, >0 an error
+]]
   local MAX_RAM_BLOB = 1024
   local blobLen = arg.blob and #(arg.blob) or 0
   local params = arg.params or {}
@@ -102,24 +119,43 @@ follows the unix convention of 0 = OK, >0 an error ]]
   local request = arg.cmd .. "\t" .. s ..
                   ((#params == 0) and "" or  "\t" .. table.concat(params, "\t")) ..
                   "\r\n"
-  -- send out request
+
+  -- send out request broken into MAX_RAM_BLOB packets if necessary
   TCPsend(request)
   if blobLen > 0 then
-    for s = 1, blobLen, MAX_RAM_BLOB do
-      local e = s + MAX_RAM_BLOB
-      if e > blobLen then e = blobLen end
-      TCPsend(arg.blob:sub(s,e))
+    for s = 1, blobLen-1, MAX_RAM_BLOB do
+      local len = blobLen - (s-1)
+      if len > blobLem then 
+        len = blobLen
+      end 
+      TCPsend( arg.blob:sub(s,s+len-1) )
     end
   end
 
   -- listen for and process the response in TSV fields
   local line, fld = "\t"..TCPreceive(), {}
+-- print(line)
   line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2,-1) end)
 
-  --TODO: accept multiblock blob
-  -- if the response blob size is non-zero then replace it with the blob
-  fld[2] = (tonumber(fld[2]) == 0) and "" or TCPreceive(tonumber(fld[2]))
+  -- convert blobLen and status to numbers
+  fld[2] = tonumber(fld[2] or 0)
   fld[3] = tonumber(fld[3])
+
+  -- if a blob is being returned then receive it in MAX_RAM_BLOB packets if nec 
+  if fld[2] > 0 then
+    blobLen = fld[2]
+    local blob = ""
+    repeat 
+      chunk, error, partial = TCPreceive(blobLen - #blob)
+      if error then  -- TODO add tolerance of valid partials
+        print(#blob, #partial, error)
+        die("Incomplete response")
+      end
+      blob = blob .. (chunk or partial)
+    until #blob == blobLen
+  end
+    
+  -- if the response blob size is non-zero then replace it with the blob
   if fld[1] ~= arg.cmd then die( "unexpected response", 1) end
   return unpack(fld,2)
 end
@@ -132,7 +168,7 @@ local function main()
   if argn == 0 then
     arg[1], argn = "-h", 1
   end
- 
+
   -- handle arguments
   local i = 1
   while i <= argn do
@@ -162,11 +198,14 @@ end
 global( "callESP8266",     callESP8266 )
 global( "noHeaderFlag",    false )
 global( "compressionFlag", false )
+global( "CM", CM)
+global( "CR", "\r\n" )
 
--- entry point -> main() -> do_files()
+CM.force_explicit_globals() -- runtime so this can go here
+
 if not main() then
   die("Please run with option -h or --help for usage information")
 end
 
-client:close()
--- end of script
+TCPclient:close()
+

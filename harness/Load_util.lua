@@ -37,10 +37,11 @@ return function(this, socket)
       resp = ("util\t%u\t0\tFile %s (%u bytes)\r\n"):format(
                 blob:len(), filename, size)
     else
-      resp = ("util\t0\t1\File not found\r\n")
+      resp = ("util\t0\t1\tFile not found\r\n")
     end
+
   else
-    resp = ("util\t0\t1\Unknown function\r\n")
+    resp = ("util\t0\t1\tUnknown function\r\n")
   end
   this._tmpName = nil
   this._fld = nil
