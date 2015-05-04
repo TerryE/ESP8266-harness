@@ -13,7 +13,7 @@ return function(this, socket)
   package.loaded.Load_util=nil -- make routine effemeral
 
   if utilFunc == "info" then
-
+-- print("entering info")
     -- majorVer, minorVer, devVer, chipid, flashid, flashsize, flashmode, flashspeed
     local a,b,c,d,e,f,g,h=node.info();
     local info = {a,b,c,d,e,f,g,h, node.heap(),
@@ -40,6 +40,16 @@ return function(this, socket)
       resp = ("util\t0\t1\tFile not found\r\n")
     end
 
+  elseif utilFunc == "remove" then
+    local cnt, pattern = 0, fld[4]
+ --   print("pattern is "..pattern)
+    for f,_ in pairs(file.list()) do
+      if f:match(pattern) then
+        cnt = cnt + 1
+        file.remove(f)
+      end
+    end
+    resp = ("util\t0\t1\t"..cnt.." files deleted\r\n")
   else
     resp = ("util\t0\t1\tUnknown function\r\n")
   end
@@ -50,4 +60,5 @@ return function(this, socket)
 -- print( resp, (blob or ""):sub(20), #(blob or ""))
   if blob then resp=resp..blob end
   if resp then socket:send(resp) end
+-- print("just sent "..resp)
 end

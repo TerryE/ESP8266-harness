@@ -31,8 +31,9 @@
      its resident footprint as small as practical.
 ]]
 
-local DEVICE_IP = os.getenv("ESP8266_DEVICE") or "192.168.1.48"
-local DEVICE_PORT = os.getenv("ESP8266_PORT") or "8266"
+DEVICE_IP = os.getenv("ESP8266_DEVICE") or "192.168.1.48"
+DEVICE_PORT = os.getenv("ESP8266_PORT") or "8266"
+local MAX_BLOB_BRICK = 1024
 
 -- For some reason the script dir isn't on the package path so add it ----------
 local function add_script_dir_to_path()
@@ -40,52 +41,21 @@ local function add_script_dir_to_path()
   if not s then return end  -- "." is already on the path
   local path = arg[0]:sub(1,s-1)
   package.path = path.."?.lc;"..path.."?.lua;"..package.path
+  return path
 end
-
 -- Now import required modules -------------------------------------------------
-add_script_dir_to_path()
+local sript_path = add_script_dir_to_path()
+local px = require("posix")
 local CM = require("ESP8266-common")
+global( "CM", CM)
+
 local AR = require("ESP8266-routines")
-local SK = require("socket")
+global( "BT", require("ESP8266-bootstrap") )
 
-local die, connect = CM.die, SK.connect
+local die,    create_TCP_client,    TCPsend,     TCPreceive = 
+   CM.die, CM.create_TCP_client, CM.TCPsend, CM. TCPreceive
 
--- Create client TCP connection ------------------------------------------------
-local function create_TCP_client(ip, port)
-  local sk = SK.tcp().connect(ip, port) or
-               die("Unable to connect to "..ip..":"..port)
-  sk:setoption( 'keepalive', true )
-  sk:setoption( 'tcp-nodelay', true )
-  global("TCPclient", sk)
-end
-
--- Basic TCP send with error handling wrapped in -------------------------------
-local function TCPsend( buf )
---print ("Sending ... " .. buf)
-  local n, error, nSent = TCPclient:send(buf)
-  if error then
-    die( "Error sending TCP packet to ESP8266: " ..
-          error .. " (" .. nSent .. "bytes sent out of " .. n)
-  end
-end
-
--- Basic TCP receive with error handling wrapped in ----------------------------
-local function TCPreceive( limit )
-  local limit = limit or "*l"
-  local buf, error, part = TCPclient:receive( limit )
--- print("Receiving: "..buf)
-  if error then
-    die (string.format(
-      "Error receiving TCP packet from ESP8266 (%u bytes received %s): %s",
-      #part,
-      (limit == "*l") and "with no EOL"
-                       or ("out of ".. limit .." bytes expected"),
-      error))
-  end
-  return buf
-end
-
--- Low level RPC to ESP8266 ----------------------------------------------------
+-- low level RPC to ESP8266 ----------------------------------------------------
 local function callESP8266( arg )
 
 --[[ The RPC protocol to the ESP8266 is extremely lightweight as a key design
@@ -111,58 +81,40 @@ avoided where possible, e.g. if the blob size is <1K.
 On the reply a third field is also mandatory: the response status.  This
 follows the unix convention of 0 = OK, >0 an error
 ]]
-  local MAX_RAM_BLOB = 1024
   local blobLen = arg.blob and #(arg.blob) or 0
-  local params = arg.params or {}
-  local s = (blobLen > MAX_RAM_BLOB) and -blobLen or blobLen
-
-  local request = arg.cmd .. "\t" .. s ..
-                  ((#params == 0) and "" or  "\t" .. table.concat(params, "\t")) ..
-                  "\r\n"
-
-  -- send out request broken into MAX_RAM_BLOB packets if necessary
-  TCPsend(request)
-  if blobLen > 0 then
-    for s = 1, blobLen-1, MAX_RAM_BLOB do
-      local len = blobLen - (s-1)
-      if len > blobLem then 
-        len = blobLen
-      end 
-      TCPsend( arg.blob:sub(s,s+len-1) )
-    end
+  local request = arg.cmd .. "\t" .. 
+                  ((blobLen <= MAX_BLOB_BRICK) and blobLen or -blobLen)
+  local params  = arg.params or {}
+  if #params > 0 then
+    request = request .. "\t" .. table.concat(params, "\t") 
   end
-
+-- print(arg.cmd, arg.params or "")  
+  if not isset("TCPclient") then
+    create_TCP_client()
+  end
+  
+  -- send out request broken into MAX_BLOB_BRICK packets if necessary
+  TCPsend(request.. "\r\n")
+  if blobLen > 0 then TCPsend( arg.blob) end
+ 
   -- listen for and process the response in TSV fields
   local line, fld = "\t"..TCPreceive(), {}
--- print(line)
-  line:gsub("\t[^\t]*", function(f) fld[#fld+1] = f:sub(2,-1) end)
 
-  -- convert blobLen and status to numbers
+  -- split into fields and covert #2 and #3 to numeric
+  for f in line:gmatch("\t([^\t]*)") do fld[#fld+1] = f end
   fld[2] = tonumber(fld[2] or 0)
-  fld[3] = tonumber(fld[3])
+  fld[3] = tonumber(fld[3] or 0)
 
-  -- if a blob is being returned then receive it in MAX_RAM_BLOB packets if nec 
-  if fld[2] > 0 then
-    blobLen = fld[2]
-    local blob = ""
-    repeat 
-      chunk, error, partial = TCPreceive(blobLen - #blob)
-      if error then  -- TODO add tolerance of valid partials
-        print(#blob, #partial, error)
-        die("Incomplete response")
-      end
-      blob = blob .. (chunk or partial)
-    until #blob == blobLen
-  end
+  -- if a blob is being returned then receive it
+  fld[2] = (fld[2] > 0) and TCPreceive(fld[2]) or ""
     
   -- if the response blob size is non-zero then replace it with the blob
-  if fld[1] ~= arg.cmd then die( "unexpected response", 1) end
+  assert (fld[1] == arg.cmd, 
+         'unexpected response '..fld[1]..' != '..arg.cmd)
   return unpack(fld,2)
 end
 
---------------------------------------------------------------------------------
---        main function (entry point is after this definition)                --
---------------------------------------------------------------------------------
+-- main function (entry point is after this definition)
 local function main()
   local arg, argn, i, error = arg, #arg, 1
   if argn == 0 then
@@ -194,18 +146,25 @@ local function main()
   return 0
 end
 
+--=========================== Mainline Execution =============================--
+
 -- export some local variables to global context
 global( "callESP8266",     callESP8266 )
 global( "noHeaderFlag",    false )
 global( "compressionFlag", false )
-global( "CM", CM)
-global( "CR", "\r\n" )
+global( "script_path",     script_path )
+global( "CR",              "\r\n" )
 
 CM.force_explicit_globals() -- runtime so this can go here
-
 if not main() then
   die("Please run with option -h or --help for usage information")
 end
 
-TCPclient:close()
+if isset("TCPclient") then
+  px.close(TCPclient)
+end
 
+-- If a child server process is running, then wait until completion then exit
+if isset("serverPID") then
+  px.wait(serverPID)
+end

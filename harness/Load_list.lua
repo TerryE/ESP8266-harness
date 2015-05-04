@@ -10,7 +10,7 @@ return function(this, socket)
 
   -- TODO this listing might get longer than the max string length
   for fn, size in pairs(file.list()) do
-    list[#list+1] = fn .. "\t" .. size
+    list[#list+1] = ("%6u  %s"):format(size, fn)
     total = total + size
   end
 
@@ -25,6 +25,7 @@ return function(this, socket)
             #blob, listLen, total)
   end
 
+-- print( resp, (blob or ""):sub(20), #(blob or ""))
   this._fld=nil
   socket:send(resp..blob)
 end

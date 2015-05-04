@@ -27,16 +27,18 @@ Options with no parameters:
   -i                  prints memory and version information for the ESP8266
   -h                  prints this usage information
   -l                  print file listing for ESP8266
-  -b                  reformat ESP8266 and restore minimum bootstrap files
   -r                  restart ESP8266 after 2s delay
+  -B                  reformat ESP8266 and initiate bootstrap reload
   -N                  No header flag -- usually used in combination with -p
   -Z                  Compress Lua files -- used in combination with -c and -d
 
 Options with file parameter
   -c <file>           download and compile the specified file on the ESP8266
   -d <file>           download the specified file name to the ESP8266
+  -k <file>           remove the specified file from the ESP8266 filesystem
   -u <file>           upload the specified file name from the ESP8266
-
+  -S <dir>            act as boot server for ESP8266
+  
 Options with two file parameters
   -m <from> <to>      move the specified file within the ESP8266 file system
 
@@ -62,7 +64,6 @@ local function getInfo()
   if ans[2] >0 then return 1, tonumber(ans[2]), ans[3] end
   ans = {unpack(ans,3)}
   -- noHeader mode is used for command scripts, e.g. declare `esp8266 -N -i`
-print("noHeaderFlag = ", noHeaderFlag)
   local layout = noHeaderFlag and "ESP8266_%s=%s" or "%s: %s"
   for i,v in ipairs(ans) do
     ans[i] = layout:format(keys[i]:gsub("[^\%w]", "_"), v)
@@ -98,6 +99,20 @@ end
 local function restart()
   local _, status, resp = callESP8266{cmd="util", params = {"restart"}}
   return 0, status, resp
+end
+
+-- Act as bootserver for the ESP8266 -------------------------------------------
+local function bootServer(boot_dir)
+  local manifest = loadfile("boot_dir" .. "/Manifest.lua")
+  local pid = px.fork()
+  assert (pid >= 0, "Attempt to fork boot server failed")
+  
+  if pid == 0 then
+    boot_listener(boot_dir, manifest)
+  else
+    global("serverPID", pid)
+    return 1, 0, "Listener "..pid.." serving "..boot_dir
+  end
 end
 
 -- Reformat and bootstrap the ESP8266 ------------------------------------------
@@ -181,10 +196,9 @@ local function remove(filepattern)
   --   ? matches any character
   --   * matches any character sequence
   -- and these are converted to a standard Lua pattern
-
-  filepattern = filepattern:gsub(".","\\.")
-  filepattern = filepattern:gsub("?", ".")
-  filepattern = filepattern:gsub("*", ".*")
+  filepattern = filepattern:gsub("%.","%%.")
+  filepattern = filepattern:gsub("%?", ".")
+  filepattern = filepattern:gsub("%*", ".*")
 
   local listing, status, resp = callESP8266{
       cmd="util",
@@ -201,7 +215,7 @@ local function rename(from, to)
   return 2, status, resp
 end
 
--- execute a command on the ESP8266 with blob attached -------------------------
+-- Execute a command on the ESP8266 with blob attached -------------------------
 -- note that at the moment this doesn't process any returned blobs
 
 local function executeWithBlob(commandString, blobName)
@@ -228,14 +242,15 @@ end
 local M = {
   h = getHelp,
   i = getInfo,
-  l = getFileList,
   N = setNoHeader,
   Z = setCompression,
+  l = getFileList,
   r = restart,
+  S = bootServer,
   R = bootstrap,
+  d = download,
   c = compileLua,
   p = printFile,
-  d = download,
   u = upload,
   k = remove,
   m = rename,

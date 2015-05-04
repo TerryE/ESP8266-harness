@@ -29,7 +29,7 @@ return function()
     package.loaded.Load_setup = nil -- make routine effemeral
 
     function Receiver(sk, rec)
--- print("Processing "..rec)
+print("Processing "..rec)
       local load = Load
       collectgarbage()
       local cmd = load:processCmd(rec)
@@ -55,7 +55,7 @@ return function()
     if not l then return end
     l.srv=net.createServer(net.TCP)
     l.srv:listen(8266, function(socket) socket:on("receive", Receiver) end)
-    print("Listening on " .. stn.getip() .. ":8266") 
+    print("Listening on " .. stn.getip() .. ":8266" .. " status:"..stn.status()) 
 
   --[[ At this point the timer even handler exits and the GC collects all of the
   now disused chunks, so only those associated with Load remain ]]

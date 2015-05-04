@@ -1,0 +1,20 @@
+TODO
+====
+* I've had to switch to POSIX sockets for the bootstrap and it doesn't make 
+  sense to have two socket libraries in the same program so I need to switch 
+  the main callESP8266() over to POSIX solckets / TCP as well
+
+* Add remove and rename code
+
+* Add execute code
+
+* Fully test cases where the block length is 1K or greater on both download and 
+  upload
+
+* Review crc16 code to add inline sig to net the CRC to 0
+
+* Complete bootstrap reload
+
+* Review eLua code generation and patch ChunkySpy to be able to handle eLua
+  lc files
+

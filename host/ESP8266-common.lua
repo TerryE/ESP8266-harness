@@ -5,11 +5,13 @@ two separate commands, but in the end the ESP-xx init function is just another
 embedded function in ESP8266-host.
 ]]
 
+local px = require("posix")
+
 -- Abnormal exit ---------------------------------------------------------------
 local function die( msg, rtn ) 
   if(type(rtn)=="string") then rtn = tonumber(rtn) end
   io.stderr:write( msg.."\n" )
-  if isset(client) then client:close() end
+  if isset("client") then client:close() end
   os.exit(rtn or 1)
 end
 
@@ -35,18 +37,13 @@ rawset(_G, "isset", function(var) return rawget(_G, var) end)
   ]]
 local function force_explicit_globals()
   setmetatable(_G, {__newindex = function (t, k, v)
-      if (k:sub(1,2) ~= "__") then
-        local t = debug.getinfo(1,'nl')
-        local msg = "Global \"%s\" implicitly defined at %s line %u. Use global()"
-        die(msg:format(k, t.namewhat, t.currentline), 2)
-      end
+      assert( k:sub (1,2) == "__",
+              "Global \""..k.."\" implicitly defined . Use global()")
       rawset(t, k, v or {})
     end,
     __index = function (t, k)
       if (k:sub(1,2) ~= "__") then
-        local t = debug.getinfo(1,'nl')
-        local msg = "Global %s is nil at %s line %u."
-        print(msg:format(k, t.namewhat, t.currentline))
+        assert(false,"Global "..k.." is nil.")
       end
       return nil
     end
@@ -148,9 +145,9 @@ local bit=require("bit")
 local oddparity = { --[[0,]] 1, 1, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 1, 0 }
       oddparity[0] = 0  -- start array at index 0 instead of conventional 1
       
-function ow_crc16(rec, crc)
+local function ow_crc16(rec, crc)
   local AND, XOR, RSHIFT = bit.band, bit.bxor, bit.rshift
-  local oddparity, crc, cdata, i = oddparity, (crc or 0)
+  local oddparity, crc, cdata = oddparity, (crc or 0)
   for i = 1, #rec do
     cdata, crc = XOR(rec:byte(i),crc) % 256, RSHIFT(crc,8)
     if oddparity[cdata % 16] ~= oddparity[RSHIFT(cdata, 4)] then
@@ -163,6 +160,80 @@ function ow_crc16(rec, crc)
   return crc
 end
 
+--[[ force_zero_crc generates a valid Lua comment ------------------------------
+  typically of the form "-- XY" which when appended to a Lua code string 
+  results it it having an ow_crc16() of zero.
+  
+  Note that the reason for the crclsb == 10 check is that X can == '\n', in 
+  which the comment would be "-- \nY" and Y would be parsed as a separate 
+  statement, creating a compile error. In this case "---XY" is generated.  Also 
+  note that this trick exploits the linear properties of a CRC generator and 
+  it's these same properties which make CRCs suck in cryptographic terms.
+  ]]
+local function force_zero_crc(s)
+  local epilog, crc, crclsb = "-- ", ow_crc16(s.."-- ")
+  if crc%256 == 10 then 
+    crcls, crc = "---", ow_crc16(s.."---")
+  end
+  crclsb = crc%256
+  return epilog..string.char(crclsb, (crc-crclsb)/256)
+end
+
+-- Create client TCP connection ------------------------------------------------
+local function create_TCP_client()
+  local ip, port = DEVICE_IP, DEVICE_PORT
+  local sk = px.socket (px.AF_INET, px.SOCK_STREAM, 0)
+--  px.setsockopt( sk, px.SOL_SOCKET, px.SO_KEEPALIVE, 1 )
+--  px:setsockopt( sk, px.SOL_SOCKET, px.SO_RCVTIMEO, 1,0 )
+  assert(sk, "Unable to allocate TCP/IP socket")
+  local ok, err, e = px.connect (sk, {family=px.AF_INET, addr=ip, port=port})
+  if err then 
+    die("Unable to connect to "..ip..":"..port.. " - "..err)
+  end
+  
+  global("TCPclient", sk)  
+end
+
+local MAX_BLOB_BRICK = 1024
+
+-- Basic TCP send with error handling wrapped in -------------------------------
+local function TCPsend( buf )
+-- print(buf)
+  if not isset("TCPclient") then 
+    create_TCP_client()
+  end
+
+  for i = 1, #buf, MAX_BLOB_BRICK do
+    local len = #buf - (i-1)
+    if len > MAX_BLOB_BRICK then len = MAX_BLOB_BRICK end
+    local nSent = px.send(TCPclient,buf:sub(i,i+len-1))
+    assert (nSent == len, 
+          "Error sending TCP packet to ESP8266: "..nSent.."bytes of "..len)
+  end
+end
+
+local TCPrec = ""
+-- Basic TCP receive with error handling wrapped in ----------------------------
+local function TCPreceive( limit )
+  local limit,rec = limit and tonumber(limit) or "*l"
+  if limit == "*l" then
+    -- receive the response line
+    TCPrec = TCPrec..px.recv (TCPclient, MAX_BLOB_BRICK)
+    local s,e = TCPrec:find("\r?\n")
+    assert(s, "Fragmented response from ESP8266")
+    rec, TCPrec = TCPrec:sub(1,s-1), TCPrec:sub(e+1)
+  else
+    while limit > #TCPrec do
+      local len = limit - #TCPrec
+      if len > MAX_BLOB_BRICK then len= MAX_BLOB_BRICK end
+      TCPrec = TCPrec .. px.recv (TCPclient, len)
+    end
+    rec, TCPrec= TCPrec:sub(1,limit), TCPrec:sub(limit+1)
+  end
+-- print(rec)
+  return rec
+end  
+
 local M = {
   die = die,
   force_explicit_globals = force_explicit_globals,
@@ -171,6 +242,10 @@ local M = {
   compress_lua = compress_lua,
   get_file = get_file,
   ow_crc16 = ow_crc16,
+  force_zero_crc = force_zero_crc,
+  create_TCP_client = create_TCP_client,
+  TCPsend = TCPsend,
+  TCPreceive = TCPreceive,
   }
 
 return M
